@@ -1,11 +1,11 @@
-# Sample-Code-C++
-Sample Code for newbie
-# 1-SnakeGame
-  Requirement:
-  - IDE: VS2013
-  - OS: Windows
-  - Language: C++
-  
-  Release date: 2015
-  
-  Demo: https://youtu.be/MGb5rRRL5Yg
+# cpp-practice
+
+Sample C++ projects for beginners.
+
+## Projects
+
+| # | Project | Path | Description | Platforms |
+|---|---------|------|-------------|-----------|
+| 1 | Snake Game | [`SnakeGame/`](SnakeGame/) | Console snake with separate game logic, map data, and cross-platform console layer | Windows, Linux, macOS |
+
+See each folder’s `README.md` for details.

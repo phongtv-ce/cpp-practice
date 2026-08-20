@@ -1,421 +1,243 @@
-#include <stdio.h>
-#include <windows.h>
-#include <conio.h>
-#include <time.h>
+#include "console.h"
+#include "game.h"
 
-//Game
-int SPEED=210;
-#define SNAKE	'O'
-#define PR		'$'
+#include <cstdlib>
+#include <ctime>
 
-//Define const color
-#define BLACK 0
-#define DARK_BLUE 1
-#define DARK_GREEN 2
-#define DARK_CYAN 3
-#define DARK_RED 4
-#define DARK_MAGENTA 5
-#define DARK_YELLOW 6
-#define GRAY 7
-#define DARK_GRAY 8
-#define BLUE 9
-#define GREEN 10
-#define CYAN 11
-#define RED 12
-#define MAGENTA 13
-#define YELLOW 14
-#define WHITE 15
+// ---------------------------------------------------------------------------
+// Display characters (ASCII — works on Windows + Linux/macOS)
+// ---------------------------------------------------------------------------
+static const char SNAKE_CH = 'O';
+static const char PREY_CH  = '$';
+static const char WALL_CH  = '#';   // border & obstacles (was CP437 219)
+static const char BAR_CH   = '=';   // difficulty meter
+static const char DEAD_CH  = 'X';
+static const char EMPTY_CH = ' ';
+static const char BODY_CH  = 'o';
 
-struct Point
-{
-	int x, y;
+enum {
+    HUD_ROW      = 27,
+    HUD_HINT_X   = 1,
+    HUD_LEVEL_X  = 50,
+    HUD_SCORE_X  = 65,
+    HUD_PAUSE_X  = 30,
+
+    MENU_TITLE_X = 32,
+    MENU_TITLE_Y = 1,
+    MENU_ITEM_X  = 35,
+    MENU_ITEM_Y0 = 4,
+    MENU_HINT_X  = 20,
+
+    DIFF_TITLE_X = 32,
+    DIFF_TITLE_Y = 1,
+    DIFF_HINT_X  = 20,
+    DIFF_HINT_Y  = 10,
+    DIFF_BAR_X   = 21,
+    DIFF_BAR_Y   = 5,
+    DIFF_LABEL_X = 15,
+
+    GAMEOVER_X   = 22,
+    GAMEOVER_Y   = 12,
+    START_HINT_Y = HUD_ROW,
+
+    MENU_PLAY    = 0,
+    MENU_DIFF    = 1,
+    MENU_QUIT    = 2,
+    MENU_COUNT   = 3
 };
 
-struct Snake
+// ---------------------------------------------------------------------------
+// Draw helpers
+// ---------------------------------------------------------------------------
+static void draw_box(int x1, int y1, int x2, int y2, int color)
 {
-	Point Body[100];
-	int len;
-};
+    for (int i = x1; i <= x2; i++)
+        ConWriteXY(i, y1, color, "%c", WALL_CH);
+    for (int y = y1 + 1; y < y2; y++) {
+        ConWriteXY(x1, y, color, "%c", WALL_CH);
+        ConWriteXY(x2, y, color, "%c", WALL_CH);
+    }
+    for (int i = x1; i <= x2; i++)
+        ConWriteXY(i, y2, color, "%c", WALL_CH);
+}
 
-char map[27][84];
-char backm[27][84]=
+static void draw_map(const Game& g)
 {
-"**********************************************************************************",
-"*                                                                                *",
-"*                                                                                *",
-"*                                                               88               *",
-"*           88 88 8888 888  888  8  8                          8888              *",
-"*           82828 88   8228 8228 8888                           88               *",
-"*           82828 82   8882 8882  88                                             *",
-"*           8   8 8888 8  8 8  8  88                            88               *",
-"*                                                              8228              *",
-"*              88  88 8  88288 8888 8888                      822228             *",
-"*               2882  8  82828 8228 8822                     88822888            *",
-"*               8888     82828 8888 2288                     28822882            *",
-"*              88  88    8   8 8  8 8888                     88    88            *",
-"*                                                           882    288           *",
-"*                                                          8888    8888          *",
-"*                                                           288    882           *",
-"*          8888 8888 888  8888                              88      88           *",
-"*          2288 8228   8  8822                             882      288          *",
-"*          8822 8228   8  2288                           888888    888888        *",
-"*          8888 8888 8888 8888                                8    8             *",
-"*                                                             8    8             *",
-"*                                                             8    8             *",
-"*                                                           888    888           *",
-"*                                                                                *",
-"*                                                                                *",
-"*                                                                                *",
-"**********************************************************************************",	
-};
-void Init(int CWidth, int CHeight, Snake &snake, int &Score, int &Level);
-void setDiff(int &Speed);
-void GotoXY(int x, int y);
-void TextColor(WORD color);
-void ResizeConsole(int Width, int Height);
-int Menu(char *list[], int n, char *title);
-int WriteXY(short x, short y, WORD color, const char *format, ...);
-void Play(int CWidth, int CHeight, Snake &snake, int &Score, int &Level);
+    for (int y = 0; y < MAP_ROWS; y++)
+        for (int x = 0; x < MAP_COLS; x++) {
+            char c = g.map[y][x];
+            if (c == CELL_OBSTACLE || c == CELL_WALL)
+                ConWriteXY(x, y, CON_WHITE, "%c", WALL_CH);
+        }
+}
 
-//**************************************************************************************
+static void draw_hud(const Game& g)
+{
+    ConWriteXY(HUD_SCORE_X, HUD_ROW, CON_GREEN, " Score: %5d ", g.score);
+    ConWriteXY(HUD_LEVEL_X, HUD_ROW, CON_GREEN, " Level: %2d  ", g.level);
+    ConWriteXY(HUD_HINT_X,  HUD_ROW, CON_CYAN,
+               "Menu: ESC  Pause: SPACE  Speed: %2d/%d",
+               game_speed_level(g), SPEED_LEVEL_MAX);
+}
+
+static void draw_snake(const Game& g)
+{
+    for (int i = g.len - 1; i > 0; i--)
+        ConWriteXY(g.body[i].x, g.body[i].y, CON_CYAN, "%c", BODY_CH);
+    ConWriteXY(g.body[0].x, g.body[0].y, CON_MAGENTA, "%c", SNAKE_CH);
+}
+
+static void draw_prey(const Game& g)
+{
+    if (g.prey.x >= 0 && g.prey.y >= 0)
+        ConWriteXY(g.prey.x, g.prey.y, CON_GREEN, "%c", PREY_CH);
+}
+
+static Dir key_to_dir(int key)
+{
+    switch (key) {
+        case CON_KEY_ARROW_RIGHT: return DIR_RIGHT;
+        case CON_KEY_ARROW_UP:    return DIR_UP;
+        case CON_KEY_ARROW_LEFT:  return DIR_LEFT;
+        case CON_KEY_ARROW_DOWN:  return DIR_DOWN;
+        default:                  return DIR_RIGHT;
+    }
+}
+
+static bool is_arrow(int key)
+{
+    return key == CON_KEY_ARROW_UP || key == CON_KEY_ARROW_DOWN ||
+           key == CON_KEY_ARROW_LEFT || key == CON_KEY_ARROW_RIGHT;
+}
+
+// ---------------------------------------------------------------------------
+// Screens
+// ---------------------------------------------------------------------------
+static void screen_difficulty(Game& g)
+{
+    ConClear();
+    ConWriteXY(DIFF_TITLE_X, DIFF_TITLE_Y, CON_GREEN, "CHON MUC DO KHO");
+    ConWriteXY(DIFF_HINT_X,  DIFF_HINT_Y,  CON_RED,
+               "Nhan < hoac > de chinh. Nhan ESC de ve.");
+    ConFlush();
+
+    int key;
+    do {
+        int lv = game_speed_level(g);
+        ConWriteXY(DIFF_LABEL_X, DIFF_BAR_Y, CON_YELLOW,
+                   "Muc: [%20s] %2d/%d", "", lv, SPEED_LEVEL_MAX);
+        for (int i = 0; i < SPEED_LEVEL_MAX; i++)
+            ConWriteXY(DIFF_BAR_X + i, DIFF_BAR_Y, CON_YELLOW,
+                       "%c", i < lv ? BAR_CH : EMPTY_CH);
+        ConFlush();
+
+        key = ConGetch();
+        if (key == CON_KEY_ARROW_RIGHT) game_speed_up(g);
+        if (key == CON_KEY_ARROW_LEFT)  game_speed_down(g);
+    } while (key != CON_KEY_ESC);
+}
+
+static void screen_play(Game& g)
+{
+    ConClear();
+    ConResizeConsole(CONSOLE_W, CONSOLE_H);
+    draw_map(g);
+    draw_box(0, 0, PLAY_W + 1, PLAY_H + 1, CON_YELLOW);
+    draw_snake(g);
+    draw_prey(g);
+    ConWriteXY(HUD_HINT_X, START_HINT_Y, CON_YELLOW, "Nhan mui ten de bat dau...");
+    ConFlush();
+
+    int key;
+    do { key = ConGetch(); } while (!is_arrow(key) && key != CON_KEY_ESC);
+    if (key == CON_KEY_ESC) return;
+    game_set_dir(g, key_to_dir(key));
+    draw_hud(g);
+    ConFlush();
+
+    while (g.alive) {
+        if (ConKbhit()) {
+            key = ConGetch();
+            if (is_arrow(key)) {
+                game_set_dir(g, key_to_dir(key));
+            } else if (key == CON_KEY_SPACE) {
+                ConWriteXY(HUD_PAUSE_X, HUD_ROW, CON_YELLOW, "[PAUSE]");
+                while (ConGetch() != CON_KEY_SPACE) {}
+                ConWriteXY(HUD_PAUSE_X, HUD_ROW, CON_CYAN, "       ");
+            } else if (key == CON_KEY_ESC) {
+                return;
+            }
+        }
+
+        Point old_tail = g.body[g.len - 1];
+        int old_len = g.len;
+        StepResult result = game_step(g);
+
+        if (result == STEP_DIED) {
+            ConWriteXY(g.body[0].x, g.body[0].y, CON_RED, "%c", DEAD_CH);
+            ConWriteXY(GAMEOVER_X, GAMEOVER_Y, CON_RED,
+                       "GAME OVER! Press ESC to return.");
+            ConFlush();
+            while (ConGetch() != CON_KEY_ESC) {}
+            return;
+        }
+
+        if (g.len == old_len)
+            ConWriteXY(old_tail.x, old_tail.y, CON_CYAN, "%c", EMPTY_CH);
+        draw_snake(g);
+        draw_prey(g);
+        draw_hud(g);
+        ConFlush();
+        ConSleep(g.speed_ms);
+    }
+}
+
+// ---------------------------------------------------------------------------
 int main()
 {
-	char *title = "TRO CHOI CON RAN";
-	char *list[4] = {
-		"Bat dau choi",				//1
-		"Lich su (unavailable)",				//2
-		"Chon do kho",		//3
-		"Thoat",	//4
-	};
-	int CWidth=80, CHeight=25,
-		Score=0, select=0, Level;
-	Snake snake;
-	
-	ResizeConsole(CWidth+2, CHeight+3);
-	ResizeConsole(CWidth+2, CHeight+3);
-	do{
-		select=Menu(list,4,title);
-		switch (select){
-			case 1:
-				Init(CWidth, CHeight, snake, Score,Level);
-				Play(CWidth, CHeight, snake, Score, Level);
-				break;
-			case 2:
-				system("cls");
-				WriteXY(25,12,RED,"Chuc nang nay tam thoi bi vo hieu hoa.\n");
-				getch();
-				break;
-			case 3:
-				setDiff(SPEED);
-				break;
-			case 4:
-				return 0;
-		}
-	}while (1);
-	return 0;
-	
-}
+    srand((unsigned)time(0));
+    ConInit(CONSOLE_W, CONSOLE_H);
 
-//=================================================
-void TextColor(WORD color)
-{
-	HANDLE hConsoleOutput;
-	hConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-	CONSOLE_SCREEN_BUFFER_INFO screen_buffer_info;
-	GetConsoleScreenBufferInfo(hConsoleOutput, &screen_buffer_info);
-	WORD wAttributes = screen_buffer_info.wAttributes;
-	color &= 0x000f;
-	wAttributes &= 0xfff0;
-	wAttributes |= color;
-	SetConsoleTextAttribute(hConsoleOutput, wAttributes);
-}
-void ResizeConsole(int Width, int Height)
-{
-	COORD coord;
-	coord.X = Width;
-	coord.Y = Height;
+    Game g;
+    game_init(g);
 
-	SMALL_RECT Rect;
-	Rect.Top = 0;
-	Rect.Left = 0;
-	Rect.Bottom = Height - 1;
-	Rect.Right = Width - 1;
+    static const char* kMenuItems[MENU_COUNT] = {
+        "Bat dau choi",
+        "Chon do kho",
+        "Thoat"
+    };
+    int select = MENU_PLAY;
 
-	HANDLE Handle = GetStdHandle(STD_OUTPUT_HANDLE);      // Get Handle
-	SetConsoleScreenBufferSize(Handle, coord);            // Set Buffer Size
-	SetConsoleWindowInfo(Handle, TRUE, &Rect);            // Set Window Size
-}
-void GotoXY(int x, int y)
-{
-	COORD pos = { x, y };
-	SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos);
-}
+    for (;;) {
+        ConClear();
+        ConWriteXY(MENU_TITLE_X, MENU_TITLE_Y, CON_GREEN, "TRO CHOI CON RAN");
+        for (int i = 0; i < MENU_COUNT; i++)
+            ConWriteXY(MENU_ITEM_X, MENU_ITEM_Y0 + i,
+                       i == select ? CON_YELLOW : CON_WHITE,
+                       "%s%s", i == select ? "> " : "  ", kMenuItems[i]);
+        ConWriteXY(MENU_HINT_X, MENU_ITEM_Y0 + MENU_COUNT + 2, CON_CYAN,
+                   "Mui ten len/xuong, Enter xac nhan, ESC thoat.");
+        ConFlush();
 
-//============================================================================
-void writec(char c, int n)
-{
-	for (int i = 0; i < n; i++)
-		printf("%c", c);
-}
+        int key = ConGetch();
+        if (key == CON_KEY_ARROW_UP)
+            select = (select - 1 + MENU_COUNT) % MENU_COUNT;
+        if (key == CON_KEY_ARROW_DOWN)
+            select = (select + 1) % MENU_COUNT;
 
-void DrawBox(int x1, int y1, int x2, int y2, int color)
-{
-	TextColor(color);
-	GotoXY(x1, y1);
-	writec(219, x2 - x1 + 1);
-	for (int i = 1; i < y2 - y1; i++)
-	{
-		GotoXY(x1, y1 + i);
-		writec(219, 1);
-		GotoXY(x2, y1 + i);
-		writec(219, 1);
-	}
-	GotoXY(x1, y2);
-	writec(219, x2 - x1 + 1);
-}
+        if (key == CON_KEY_ENTER) {
+            if (select == MENU_PLAY) {
+                game_init(g, g.speed_ms);
+                screen_play(g);
+            } else if (select == MENU_DIFF) {
+                screen_difficulty(g);
+            } else {
+                break;
+            }
+        }
+        if (key == CON_KEY_ESC) break;
+    }
 
-//******************************************************************
-void Init(int CWidth, int CHeight, Snake &snake, int &Score, int &Level)
-{
-	system("cls");
-	for(int i=0; i<27; i++)
-		for(int j=0; j<84; j++)
-		{
-			map[i][j]=backm[i][j];
-			if(map[i][j]=='8')
-				WriteXY(j,i,WHITE,"%c",219);
-		}
-	snake.Body[0]={1,1};
-	snake.len=1;
-	Level=0;
-	Score=0;
-	ResizeConsole(CWidth+2, CHeight+3);
-	DrawBox(0,0,CWidth+1,CHeight+1,YELLOW);
-	TextColor(CYAN);
-	GotoXY(1,1);
-	printf("%c",SNAKE);
-}
-
-int WriteXY(short x, short y, WORD color, const char *format, ...)
-{
-	GotoXY(x, y);
-	TextColor(color);
-	
-	va_list arg;
-	int done;
-	
-	va_start(arg, format); // lay danh sach doi so dua theo format
-	done = vfprintf(stdout, format, arg); // xuat cac doi so theo format
-	va_end(arg);
-	
-	return done;
-}
-
-int Menu(char *list[], int n,char *title)
-{
-	int select = 0,
-		history = 0,
-		dPos = 5;
-	
-
-	system("cls");
-
-	// Hien thi tieu de
-	WriteXY((80 - strlen(title)) / 2, 1, GREEN, title);
-	
-	DrawBox(2, 3, 78, n+6, RED);
-
-
-	for (int i = 0; i < n; i++)
-	{
-		// In menu
-		WriteXY(6, i + dPos, WHITE, "%3d. %s", i + 1, list[i]);
-	}
-
-	//To sang lua chon mac dinh
-	WriteXY(5, select + dPos, YELLOW, "%c%3d. %s", 175, select + 1, list[select]);
-	
-	//In text huong dan
-	WriteXY(2, n+8, CYAN, "HUONG DAN: Nhan phim mui ten len ^ , xuong v hoac phim so 1 2 3... de chon\nthao tac, sau do nnhan phim enter de ket thuc thao tac chon.\n");
-	WriteXY(2, n+12, MAGENTA, "HUONG DAN CHOI: Nhan phim mui ten len ^ , xuong v , trai < hoac phai > de di\nchuyen con ran va an moi. De tam dung nhan space, de thoat nhan esc.");
-	char key = 0;
-	do
-	{
-		key = getch();
-		if(key==224)
-			key=getch();
-			
-		if (key == 72) select--;
-		if (key == 80) select++;
-		
-		if(key>'0' && key <='9')
-			select=key-'0'-1;
-		
-		if (select == -1)
-			select = n - 1;
-		else if (select >= n)
-			select = 0;
-		
-		// Xoa lua chon cu
-		WriteXY(5, history + dPos, WHITE, " %3d. %s", history + 1, list[history]);
-		
-		//To sang lua chon moi
-		WriteXY(5, select + dPos, YELLOW, "%c%3d. %s", 175, select + 1, list[select]);
-		
-		history = select;
-	} while (key != 13); // Dung khi nhan phim enter
-	
-	return select+1;
-}
-
-//Bat dau choi game
-void setPrey(int CWidth, int CHeight, Point &Prey)
-{
-	srand(time (0));
-	Prey.x=rand()%CWidth+1;
-	Prey.y=rand()%CHeight+1;
-}
-
-void Play(int CWidth, int CHeight, Snake &snake, int &Score, int &Level)
-{
-	const int dx[4]={1,0,-1,0}; 
-	const int dy[4]={0,-1,0,1};
-	int temp=0, dir=0, key;
-	
-	//dat moi
-	Point Prey;
-	setPrey(CWidth, CHeight, Prey);
-	while(map[Prey.y][Prey.x]!=' ')
-		setPrey(CWidth, CHeight, Prey);
-	WriteXY(Prey.x, Prey.y,GREEN,"%c",PR);
-	
-	WriteXY(65,27,GREEN," Score: %5d ",Score);
-	WriteXY(50,27,GREEN," Level: %2d ",Level);
-	WriteXY(1,27,CYAN,"Main menu: ESC  Pause: SPACE     Speed:%3d/20",(210-SPEED)/10);
-	
-	key=getch();
-	do
-	{
-		//An dc moi:
-		if(snake.Body[0].x==Prey.x && snake.Body[0].y==Prey.y)
-		{
-			Score++;
-			snake.len++;
-			if(Score%5==0)
-			{
-				Level++;
-				if(SPEED>30)
-					SPEED-=20;
-			}
-			WriteXY(65,27,GREEN," Score: %5d ",Score);
-			WriteXY(50,27,GREEN," Level: %5d ",Level);
-			WriteXY(1,27,CYAN,"Main menu: ESC  Pause: SPACE     Speed:%3d/20",(210-SPEED)/10);
-			//dat moi
-			setPrey(CWidth, CHeight, Prey);
-			while(map[Prey.y][Prey.x]!=' ')
-				setPrey(CWidth, CHeight, Prey);
-			WriteXY(Prey.x, Prey.y,GREEN,"%c",PR);
-		}
-	
-		//Nhan phim dieu khien
-		if(kbhit())
-		{
-			key=getch();
-			if(key==224)
-				key=getch();
-				
-			switch(key)
-			{
-				case 77: //sang phai
-					if(dir!=2)
-						dir=0;
-					break;
-				case 72://len tren
-					if(dir!=3)
-						dir=1;
-					break;
-				case 75://sang trai
-					if(dir!=0)
-						dir=2;
-					break;
-				case 80://xuong duoi
-					if(dir!=1)
-						dir=3;
-					break;
-				case 32:
-					getch();
-					break;
-			}
-		}
-		
-		for(int i=snake.len; i>0; i--)
-		{
-			snake.Body[i]=snake.Body[i-1];	
-		}
-		
-		//xac dinh toa do diem dau moi theo huong di chuyen
-		snake.Body[0].x=snake.Body[0].x+dx[dir];
-		snake.Body[0].y=snake.Body[0].y+dy[dir];
-		
-		//xoa diem cuoi dung
-		WriteXY(snake.Body[(snake.len)].x,snake.Body[(snake.len)].y,CYAN," ");
-		map[snake.Body[(snake.len)].y][snake.Body[(snake.len)].x]=' ';
-		
-		//ve diem dau
-		WriteXY(snake.Body[0].x,snake.Body[0].y,MAGENTA,"%c",SNAKE);
-		if(map[snake.Body[0].y][snake.Body[0].x]!=' '&&map[snake.Body[0].y][snake.Body[0].x]!='2')
-			{
-				WriteXY(snake.Body[0].x,snake.Body[0].y,MAGENTA,"X");
-				WriteXY(25,12,RED,"You lose! Press ESC to back main menu.");
-				while(getch()!=27);
-				return;
-			}
-		map[snake.Body[0].y][snake.Body[0].x]='1';
-		//delay
-		Sleep(SPEED);
-	}while(key!=27);
-}
-
-void setDiff(int &Speed)
-{
-	system("cls");
-	char title[]="CHON MUC DO KHO",
-		tut[]="Huong dan: Nhan phim mui ten < hoac > de dieu chinh. Nhan ESC de ve Menu.";
-	int key;
-	WriteXY((80 - strlen(title)) / 2, 1, GREEN, title);
-	WriteXY((80 - strlen(tut)) / 2, 10, RED, tut);
-	WriteXY(15,5,YELLOW,"Muc: [%40s]: %3d"," ",(210-SPEED)/10);//21
-	for(int i=0; i<(210-SPEED)/(200/40); i++)
-		WriteXY(21+i,5,YELLOW,"%c",219);//21
-	for(int i=(210-SPEED)/(200/40); i<40; i++)
-		WriteXY(21+i,5,YELLOW,"%c",32);//21
-	do{
-		key=getch();
-		if(key==224)
-			key=getch();	
-		switch(key)
-		{
-			case 77: //sang phai
-					SPEED-=10;
-					if(SPEED<10)
-						SPEED=210;
-					WriteXY(64,5,YELLOW,"%3d",(210-SPEED)/10);
-					for(int i=0; i<(210-SPEED)/(200/40); i++)
-						WriteXY(21+i,5,YELLOW,"%c",219);//21
-					for(int i=(210-SPEED)/(200/40); i<40; i++)
-						WriteXY(21+i,5,YELLOW,"%c",32);//21
-				break;
-			case 75://sang trai
-					SPEED+=10;
-					if(SPEED>210)
-						SPEED=10;
-					WriteXY(64,5,YELLOW,"%3d",(210-SPEED)/10);
-					for(int i=0; i<(210-SPEED)/(200/40); i++)
-						WriteXY(21+i,5,YELLOW,"%c",219);//21
-					for(int i=(210-SPEED)/(200/40); i<40; i++)
-						WriteXY(21+i,5,YELLOW,"%c",32);//21
-				break;
-		}
-	}while(key!=27);
-	//getch();
+    ConShutdown();
+    return 0;
 }
