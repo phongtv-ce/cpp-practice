@@ -4,6 +4,8 @@ Classic console snake (Vietnamese UI). Eat `$` to grow; avoid walls, obstacles, 
 
 **Demo:** [YouTube](https://youtu.be/MGb5rRRL5Yg)
 
+![Snake Game Preview](images/image.png)
+
 The project keeps beginner-friendly code by separating game state from platform-specific console code.
 
 ## Requirements
